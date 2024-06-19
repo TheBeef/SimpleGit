@@ -51,9 +51,9 @@ sgit branch base
 # Building
 Not much of a build setup at this point. Just
 ```
-gcc main.c
+gcc main.c -o sgit
 ```
-This works on Windows:
+This works with gcc on Windows:
 ```
 C:\sandboxes\SimpleGit>gcc --version
 gcc (x86_64-posix-seh-rev0, Built by MinGW-W64 project) 7.3.0
