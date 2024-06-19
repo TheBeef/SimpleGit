@@ -42,6 +42,7 @@ typedef enum
     e_Cmd_Info,
     e_Cmd_Diff,
     e_Cmd_VDiff,
+    e_Cmd_Switch,
     e_CmdMAX,
 } e_CmdType;
 
@@ -59,6 +60,7 @@ int Do_ShowHelp(void);
 int Do_Diff(void);
 int Do_VDiff(void);
 int Do_BranchBase(void);
+int Do_Switch(void);
 
 /*** VARIABLE DEFINITIONS     ***/
 char *m_ShellAndGrabBuffer;
@@ -84,6 +86,7 @@ int Do_ShowHelp(void)
     printf("            base -- Get the hash of where the branch will merge from\n");
     printf("        diff -- Do a git diff\n");
     printf("        vdiff -- Do a git visual diff (using extern diff tool)\n");
+    printf("        switch -- Change to a different branch\n");
     printf("    sub-commands -- Depends on 'command' (see above)\n");
 
     return 0;
@@ -137,6 +140,10 @@ int main(int argc,const char *argv[])
     {
         Cmd=e_Cmd_Info;
     }
+    else if(strcmp(m_Cmds[0],"switch")==0)
+    {
+        Cmd=e_Cmd_Switch;
+    }
     else if(strcmp(m_Cmds[0],"branch")==0)
     {
         if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"status")==0)
@@ -170,6 +177,9 @@ int main(int argc,const char *argv[])
         break;
         case e_Cmd_Info:
             RetValue=Do_Info();
+        break;
+        case e_Cmd_Switch:
+            RetValue=Do_Switch();
         break;
         case e_CmdMAX:
         default:
@@ -519,6 +529,7 @@ int Do_Diff(void)
     }
     return RetValue;
 }
+
 int Do_VDiff(void)
 {
     char buff[1000];
@@ -596,5 +607,42 @@ int Do_BranchBase(void)
 
     free(MainBranchName);
 
+    return RetValue;
+}
+
+int Do_Switch(void)
+{
+    char buff[1000];
+    int RetValue;
+    int Bytes;
+    int r;
+    int o;
+
+    RetValue=0;
+    ctry(const char *)
+    {
+        /* We are currently just doing a pass though */
+        Bytes=snprintf(buff,sizeof(buff),"git switch ");
+        if(Bytes>sizeof(buff))
+            cthrow("Internal buffer to small");
+
+        for(r=1;r<m_CmdsCount;r++)
+        {
+            for(o=0;o<m_CmdOptionsCount[r];o++)
+            {
+                strncat(buff,m_CmdOptions[r][o],sizeof(buff));
+                strncat(buff," ",sizeof(buff));
+            }
+
+            strncat(buff,m_Cmds[r],sizeof(buff));
+            strncat(buff," ",sizeof(buff));
+        }
+        system(buff);
+    }
+    ccatch(const char *Msg)
+    {
+        fprintf(stderr,"%s\n",Msg);
+        RetValue=1;
+    }
     return RetValue;
 }
