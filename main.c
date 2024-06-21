@@ -50,7 +50,17 @@ typedef enum
     e_CmdMAX,
 } e_CmdType;
 
+typedef enum
+{
+    e_LocalRepo_NoChange,
+    e_LocalRepo_Ahead,
+    e_LocalRepo_Behind,
+    e_LocalRepo_Deverged,
+    e_LocalRepoMAX,
+} e_LocalRepoType;
+
 /*** FUNCTION PROTOTYPES      ***/
+bool GetRepoCommitsCounts(int *Behind,int *Ahead);
 char *FindLine(char *Buffer,char *Find);
 char *GetMainBranchName(void);
 char *GetCurrentBranchName(void);
@@ -357,6 +367,51 @@ char *GetCurrentBranchName(void)
     strcpy(RetStr,Buffer);
 
     return RetStr;
+}
+
+bool GetRepoCommitsCounts(int *Behind,int *Ahead)
+{
+    char *Buffer;
+    char *End;
+    char *MainBranch;
+    char *RetStr;
+
+    if(ShellOut("git fetch")<0)
+        return false;
+
+    Buffer=ShellAndGrab("git rev-list --count \"HEAD..@{u}\"");
+    if(Buffer==NULL)
+        return false;
+
+    *Behind=atoi(Buffer);
+
+    Buffer=ShellAndGrab("git rev-list --count \"@{u}..HEAD\"");
+    if(Buffer==NULL)
+        return false;
+
+    *Ahead=atoi(Buffer);
+
+    return true;
+}
+
+e_LocalRepoType GetLocalRepoCommitStatus(void)
+{
+    int Behind;
+    int Ahead;
+
+    if(!GetRepoCommitsCounts(&Behind,&Ahead))
+        return e_LocalRepoMAX;
+
+    if(Behind==0 && Ahead==0)
+        return e_LocalRepo_NoChange;
+
+    if(Behind>0 && Ahead==0)
+        return e_LocalRepo_Behind;
+
+    if(Behind==0 && Ahead>0)
+        return e_LocalRepo_Ahead;
+
+    return e_LocalRepo_Deverged;
 }
 
 char *ShellAndGrab(const char *Cmd)
@@ -719,10 +774,21 @@ int Do_UnCommit(void)
     int r;
     int o;
     const char *File2Restore;
+    int Behind;
+    int Ahead;
 
     RetValue=0;
     ctry(const char *)
     {
+        if(!GetRepoCommitsCounts(&Behind,&Ahead))
+            cthrow("Failed to get commit counts");
+
+        if(Ahead==0)
+        {
+            /* We can't uncommit things that wheren't pushed */
+            cthrow("Repo has no local commits.  Can't uncommit remote commits.");
+        }
+
         /* hard = toss commits, delete working
            mix = uncommit file and put back in working
            soft = uncommit files, but leave them stashed
