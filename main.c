@@ -43,6 +43,10 @@ typedef enum
     e_Cmd_Diff,
     e_Cmd_VDiff,
     e_Cmd_Switch,
+    e_Cmd_Revert,
+    e_Cmd_Pull,
+    e_Cmd_Push,
+    e_Cmd_Uncommit,
     e_CmdMAX,
 } e_CmdType;
 
@@ -51,18 +55,20 @@ char *FindLine(char *Buffer,char *Find);
 char *GetMainBranchName(void);
 char *GetCurrentBranchName(void);
 char *ShellAndGrab(const char *Cmd);
+int ShellOut(const char *cmd);
 char *Skip2StartOfNextLine(char *p);
 void rtrim(char *Str);
 void Do_Status(void);
 int Do_BranchStatus(void);
 int Do_Info(void);
 int Do_ShowHelp(void);
-int Do_Diff(void);
-int Do_VDiff(void);
+int Do_PassThough(const char *GitCmd);
 int Do_BranchBase(void);
-int Do_Switch(void);
+int Do_Revert(void);
+int Do_UnCommit(void);
 
 /*** VARIABLE DEFINITIONS     ***/
+bool g_ShowGit;
 char *m_ShellAndGrabBuffer;
 unsigned int m_ShellAndGrabBufferSize;
 
@@ -74,12 +80,15 @@ int m_CmdOptionsCount[20];
 int Do_ShowHelp(void)
 {
     printf("USAGE:\n");
-    printf("    sgit command sub-command\n");
+    printf("    sgit [GlobalOptions] command sub-command\n");
     printf("\n");
     printf("WHERE\n");
+    printf("    GlobalOptions -- These are options that apply to all sgit\n");
+    printf("                     commands.  Supported options:\n");
+    printf("                        --show -- Show the git commands being run\n");
     printf("    command -- The main command to do.  It is one of the following:\n");
     printf("        info -- Get info about the repo\n");
-    printf("        status -- Get the current status of files\n");
+    printf("        status (s) -- Get the current status of files\n");
     printf("        branch -- Commands that work on branches.  Supported sub commands:\n");
     printf("            status -- Get a list of files that have been changed on the\n");
     printf("                      current branch\n");
@@ -87,6 +96,13 @@ int Do_ShowHelp(void)
     printf("        diff -- Do a git diff\n");
     printf("        vdiff -- Do a git visual diff (using extern diff tool)\n");
     printf("        switch -- Change to a different branch\n");
+    printf("        revert -- Throw away any local changes (-a to throw away local commits as well)\n");
+    printf("        uncommit -- Pull the last commit back out to the working copy and delete the commit\n");
+//    printf("        regret -- I regret doing something, let me fix it.  Sub commands:\n");
+//    printf("            commit -- Pull the last commit back out to the working copy\n");
+    printf("        pull -- Do a git pull\n");
+    printf("        push -- Do a git push\n");
+//    printf("        undo -- Check in a set of commits undoing commits\n");
     printf("    sub-commands -- Depends on 'command' (see above)\n");
 
     return 0;
@@ -98,33 +114,47 @@ int main(int argc,const char *argv[])
     e_CmdType Cmd;
     int RetValue;
 
+    g_ShowGit=false;
+
     m_CmdsCount=0;
     Cmd=e_CmdMAX;
     for(r=1;r<argc;r++)
     {
         if(argv[r][0]=='-')
         {
-            /* Option */
-            m_CmdOptions[m_CmdsCount][m_CmdOptionsCount[m_CmdsCount]]=argv[r];
-            m_CmdOptionsCount[m_CmdsCount]++;
+            if(m_CmdsCount==0)
+            {
+                /* Global options */
+                if(strcmp(argv[r],"--show")==0)
+                    g_ShowGit=true;
+                if(strcmp(argv[r],"--help")==0)
+                {
+                    Do_ShowHelp();
+                    return 0;
+                }
+            }
+            else
+            {
+                /* Command Option */
+                m_CmdOptions[m_CmdsCount-1][m_CmdOptionsCount[m_CmdsCount-1]]=argv[r];
+                m_CmdOptionsCount[m_CmdsCount-1]++;
+            }
         }
         else
         {
             m_Cmds[m_CmdsCount++]=argv[r];
         }
     }
-
     if(m_CmdsCount<1)
     {
-        fprintf(stderr,"No commands");
-        return 1;
+        m_Cmds[0]="help";
     }
 
     if(strcmp(m_Cmds[0],"help")==0)
     {
         Cmd=e_Cmd_Help;
     }
-    else if(strcmp(m_Cmds[0],"status")==0 || strcmp(m_Cmds[0],"stat")==0)
+    else if(strcmp(m_Cmds[0],"status")==0 || strcmp(m_Cmds[0],"s")==0)
     {
         Cmd=e_Cmd_Status;
     }
@@ -143,6 +173,22 @@ int main(int argc,const char *argv[])
     else if(strcmp(m_Cmds[0],"switch")==0)
     {
         Cmd=e_Cmd_Switch;
+    }
+    else if(strcmp(m_Cmds[0],"revert")==0)
+    {
+        Cmd=e_Cmd_Revert;
+    }
+    else if(strcmp(m_Cmds[0],"pull")==0)
+    {
+        Cmd=e_Cmd_Pull;
+    }
+    else if(strcmp(m_Cmds[0],"push")==0)
+    {
+        Cmd=e_Cmd_Push;
+    }
+    else if(strcmp(m_Cmds[0],"uncommit")==0)
+    {
+        Cmd=e_Cmd_Uncommit;
     }
     else if(strcmp(m_Cmds[0],"branch")==0)
     {
@@ -164,10 +210,10 @@ int main(int argc,const char *argv[])
             Do_Status();
         break;
         case e_Cmd_Diff:
-            RetValue=Do_Diff();
+            RetValue=Do_PassThough("diff");
         break;
         case e_Cmd_VDiff:
-            RetValue=Do_VDiff();
+            RetValue=Do_PassThough("difftool");
         break;
         case e_Cmd_BranchStatus:
             RetValue=Do_BranchStatus();
@@ -179,7 +225,19 @@ int main(int argc,const char *argv[])
             RetValue=Do_Info();
         break;
         case e_Cmd_Switch:
-            RetValue=Do_Switch();
+            RetValue=Do_PassThough("switch");
+        break;
+        case e_Cmd_Revert:
+            RetValue=Do_Revert();
+        break;
+        case e_Cmd_Pull:
+            RetValue=Do_PassThough("pull");
+        break;
+        case e_Cmd_Push:
+            RetValue=Do_PassThough("push");
+        break;
+        case e_Cmd_Uncommit:
+            RetValue=Do_UnCommit();
         break;
         case e_CmdMAX:
         default:
@@ -312,7 +370,9 @@ char *ShellAndGrab(const char *Cmd)
     int NewSize;
 
     /* Open the command for reading. */
-    fp=popen(Cmd, "rb");
+    if(g_ShowGit)
+        printf("\33[35m%s\33[m\n",Cmd);
+    fp=popen(Cmd,"rb");
     if(fp==NULL)
         return NULL;
 
@@ -380,7 +440,14 @@ char *FindLine(char *Buffer,char *Find)
 
 void Do_Status(void)
 {
-    system("git status");
+    ShellOut("git status");
+}
+
+int ShellOut(const char *Cmd)
+{
+    if(g_ShowGit)
+        printf("\33[35m%s\33[m\n",Cmd);
+    return system(Cmd);
 }
 
 int Do_BranchStatus(void)
@@ -493,7 +560,7 @@ int Do_Info(void)
     return RetValue;
 }
 
-int Do_Diff(void)
+int Do_PassThough(const char *GitCmd)
 {
     char buff[1000];
     int RetValue;
@@ -505,59 +572,28 @@ int Do_Diff(void)
     ctry(const char *)
     {
         /* We are currently just doing a pass though */
-        Bytes=snprintf(buff,sizeof(buff),"git diff ");
+        Bytes=snprintf(buff,sizeof(buff),"git %s ",GitCmd);
         if(Bytes>sizeof(buff))
             cthrow("Internal buffer to small");
 
+        for(o=0;o<m_CmdOptionsCount[0];o++)
+        {
+            strncat(buff,m_CmdOptions[0][o],sizeof(buff));
+            strncat(buff," ",sizeof(buff));
+        }
+
         for(r=1;r<m_CmdsCount;r++)
         {
+            strncat(buff,m_Cmds[r],sizeof(buff));
+            strncat(buff," ",sizeof(buff));
+
             for(o=0;o<m_CmdOptionsCount[r];o++)
             {
                 strncat(buff,m_CmdOptions[r][o],sizeof(buff));
                 strncat(buff," ",sizeof(buff));
             }
-
-            strncat(buff,m_Cmds[r],sizeof(buff));
-            strncat(buff," ",sizeof(buff));
         }
-        system(buff);
-    }
-    ccatch(const char *Msg)
-    {
-        fprintf(stderr,"%s\n",Msg);
-        RetValue=1;
-    }
-    return RetValue;
-}
-
-int Do_VDiff(void)
-{
-    char buff[1000];
-    int RetValue;
-    int Bytes;
-    int r;
-    int o;
-
-    RetValue=0;
-    ctry(const char *)
-    {
-        /* We are currently just doing a pass though */
-        Bytes=snprintf(buff,sizeof(buff),"git difftool ");
-        if(Bytes>sizeof(buff))
-            cthrow("Internal buffer to small");
-
-        for(r=1;r<m_CmdsCount;r++)
-        {
-            for(o=0;o<m_CmdOptionsCount[r];o++)
-            {
-                strncat(buff,m_CmdOptions[r][o],sizeof(buff));
-                strncat(buff," ",sizeof(buff));
-            }
-
-            strncat(buff,m_Cmds[r],sizeof(buff));
-            strncat(buff," ",sizeof(buff));
-        }
-        system(buff);
+        ShellOut(buff);
     }
     ccatch(const char *Msg)
     {
@@ -610,34 +646,91 @@ int Do_BranchBase(void)
     return RetValue;
 }
 
-int Do_Switch(void)
+int Do_Revert(void)
 {
+    char *CurrentBranchName;
     char buff[1000];
     int RetValue;
     int Bytes;
     int r;
     int o;
+    bool RepoAsWell;
+    const char *File2Restore;
 
     RetValue=0;
     ctry(const char *)
     {
-        /* We are currently just doing a pass though */
-        Bytes=snprintf(buff,sizeof(buff),"git switch ");
-        if(Bytes>sizeof(buff))
-            cthrow("Internal buffer to small");
-
-        for(r=1;r<m_CmdsCount;r++)
+        /* Check all our options */
+        RepoAsWell=false;
+        for(r=0;r<m_CmdsCount;r++)
         {
             for(o=0;o<m_CmdOptionsCount[r];o++)
             {
-                strncat(buff,m_CmdOptions[r][o],sizeof(buff));
-                strncat(buff," ",sizeof(buff));
+                if(strcmp(m_CmdOptions[r][o],"-a")==0)
+                    RepoAsWell=true;
+            }
+        }
+
+        if(RepoAsWell)
+        {
+            CurrentBranchName=GetCurrentBranchName();
+            if(CurrentBranchName==NULL)
+                cthrow("Failed to get current branch name");
+
+            /* hard = toss commits, delete working
+               mix = uncommit file and put back in working
+               soft = uncommit files, but leave them stashed
+            */
+            Bytes=snprintf(buff,sizeof(buff),"git reset --hard \"origin/%s\" ",
+                    CurrentBranchName);
+            if(Bytes>sizeof(buff))
+                cthrow("Internal buffer to small");
+        }
+        else
+        {
+            File2Restore=".";
+            if(m_CmdsCount>=2)
+            {
+                /* User provided a filename to revert */
+                File2Restore=m_Cmds[1];
             }
 
-            strncat(buff,m_Cmds[r],sizeof(buff));
-            strncat(buff," ",sizeof(buff));
+            /* We are currently just doing a pass though */
+            Bytes=snprintf(buff,sizeof(buff),"git restore \"%s\"",File2Restore);
+            if(Bytes>sizeof(buff))
+                cthrow("Internal buffer to small");
         }
-        system(buff);
+        ShellOut(buff);
+    }
+    ccatch(const char *Msg)
+    {
+        fprintf(stderr,"%s\n",Msg);
+        RetValue=1;
+    }
+    return RetValue;
+}
+
+int Do_UnCommit(void)
+{
+    char *CurrentBranchName;
+    char buff[1000];
+    int RetValue;
+    int Bytes;
+    int r;
+    int o;
+    const char *File2Restore;
+
+    RetValue=0;
+    ctry(const char *)
+    {
+        /* hard = toss commits, delete working
+           mix = uncommit file and put back in working
+           soft = uncommit files, but leave them stashed
+        */
+        Bytes=snprintf(buff,sizeof(buff),"git reset --mixed \"HEAD^\"");
+        if(Bytes>sizeof(buff))
+            cthrow("Internal buffer to small");
+        ShellOut(buff);
     }
     ccatch(const char *Msg)
     {
