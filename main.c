@@ -39,6 +39,8 @@ typedef enum
     e_Cmd_Status,
     e_Cmd_BranchStatus,
     e_Cmd_BranchBase,
+    e_Cmd_BranchCreate,
+    e_Cmd_BranchList,
     e_Cmd_Info,
     e_Cmd_Diff,
     e_Cmd_VDiff,
@@ -68,8 +70,12 @@ char *ShellAndGrab(const char *Cmd);
 int ShellOut(const char *cmd);
 char *Skip2StartOfNextLine(char *p);
 void rtrim(char *Str);
+bool GetBranchCommitsCounts(int *Behind,int *Ahead,const char *MainBranchName,
+        const char *BranchName);
 void Do_Status(void);
 int Do_BranchStatus(void);
+int Do_BranchCreate(void);
+int Do_BranchList(int OptionIndex);
 int Do_Info(void);
 int Do_ShowHelp(void);
 int Do_PassThough(const char *GitCmd);
@@ -103,6 +109,9 @@ int Do_ShowHelp(void)
     printf("            status -- Get a list of files that have been changed on the\n");
     printf("                      current branch\n");
     printf("            base -- Get the hash of where the branch will merge from\n");
+    printf("            create -- Make a new branch from the currently checked out branch.\n");
+    printf("            list -- List currently available branches (-a to include server branches). This is the same as branches\n");
+    printf("        branches -- List currently available branches (-a to include server branches).\n");
     printf("        diff -- Do a git diff\n");
     printf("        vdiff -- Do a git visual diff (using extern diff tool)\n");
     printf("        switch -- Change to a different branch\n");
@@ -123,6 +132,7 @@ int main(int argc,const char *argv[])
     int r;
     e_CmdType Cmd;
     int RetValue;
+    int OptionIndex;
 
     g_ShowGit=false;
 
@@ -159,6 +169,8 @@ int main(int argc,const char *argv[])
     {
         m_Cmds[0]="help";
     }
+
+    OptionIndex=0;
 
     if(strcmp(m_Cmds[0],"help")==0)
     {
@@ -202,10 +214,22 @@ int main(int argc,const char *argv[])
     }
     else if(strcmp(m_Cmds[0],"branch")==0)
     {
-        if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"status")==0)
+        if(m_CmdsCount>=2 && (strcmp(m_Cmds[1],"status")==0 || strcmp(m_Cmds[1],"s")==0))
             Cmd=e_Cmd_BranchStatus;
         if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"base")==0)
             Cmd=e_Cmd_BranchBase;
+        if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"create")==0)
+            Cmd=e_Cmd_BranchCreate;
+        if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"list")==0)
+        {
+            OptionIndex=1;
+            Cmd=e_Cmd_BranchList;
+        }
+    }
+    else if(strcmp(m_Cmds[0],"branches")==0)
+    {
+        OptionIndex=0;
+        Cmd=e_Cmd_BranchList;
     }
 
     setupConsole();
@@ -230,6 +254,12 @@ int main(int argc,const char *argv[])
         break;
         case e_Cmd_BranchBase:
             RetValue=Do_BranchBase();
+        break;
+        case e_Cmd_BranchCreate:
+            RetValue=Do_BranchCreate();
+        break;
+        case e_Cmd_BranchList:
+            RetValue=Do_BranchList(OptionIndex);
         break;
         case e_Cmd_Info:
             RetValue=Do_Info();
@@ -376,8 +406,8 @@ bool GetRepoCommitsCounts(int *Behind,int *Ahead)
     char *MainBranch;
     char *RetStr;
 
-    if(ShellOut("git fetch")<0)
-        return false;
+//    if(ShellOut("git fetch")<0)
+//        return false;
 
     Buffer=ShellAndGrab("git rev-list --count \"HEAD..@{u}\"");
     if(Buffer==NULL)
@@ -390,6 +420,42 @@ bool GetRepoCommitsCounts(int *Behind,int *Ahead)
         return false;
 
     *Ahead=atoi(Buffer);
+
+    return true;
+}
+
+bool GetBranchCommitsCounts(int *Behind,int *Ahead,const char *MainBranchName,
+        const char *BranchName)
+{
+    char *Buffer;
+    char *End;
+    char *MainBranch;
+    char *AfterStr;
+    char buff[1000];
+    int Bytes;
+
+//    if(ShellOut("git fetch")<0)
+//        return false;
+
+    Bytes=snprintf(buff,sizeof(buff),"git rev-list --left-right --count \"%s\"...\"%s\"",
+            MainBranchName,BranchName);
+    if(Bytes>sizeof(buff))
+        return false;
+
+    Buffer=ShellAndGrab(buff);
+    if(Buffer==NULL)
+        return false;
+
+    *Behind=atoi(Buffer);
+    AfterStr=strchr(Buffer,'\t');
+    if(AfterStr==NULL)
+    {
+        AfterStr=strchr(Buffer,' ');
+        if(AfterStr==NULL)
+            return false;
+    }
+
+    *Ahead=atoi(AfterStr);
 
     return true;
 }
@@ -517,6 +583,11 @@ int Do_BranchStatus(void)
     char *Output;
     char *p;
     char *StartOfLine;
+    int Behind;
+    int Ahead;
+
+    MainBranchName=NULL;
+    CurrentBranchName=NULL;
 
     /* Do a: git diff --name-only $(git merge-base master HEAD) */
     RetValue=0;
@@ -543,14 +614,37 @@ int Do_BranchStatus(void)
         if(Bytes>sizeof(buff))
             cthrow("Internal buffer to small");
 
+        printf("On branch %s\n",CurrentBranchName);
+
+        if(!GetBranchCommitsCounts(&Behind,&Ahead,MainBranchName,
+                CurrentBranchName))
+        {
+            cthrow("Failed to get ahead/behind info about the current branch");
+        }
+
+        if(Behind==0 && Ahead==0)
+        {
+            printf("Your branch is up to date with '%s'.\n",CurrentBranchName);
+        }
+        else if(Behind>0 && Ahead==0)
+        {
+            printf("Your branch is behind '%s' by %d commits\n",MainBranchName,Behind);
+        }
+        else if(Behind==0 && Ahead>0)
+        {
+            printf("Your branch is ahead of '%s' by %d commits.\n",MainBranchName,Ahead);
+        }
+        else
+        {
+            printf("Your branch and '%s' have diverged.\n",MainBranchName);
+            printf("    Your branch is ahead of '%s' by %d commits.\n",MainBranchName,Ahead);
+            printf("    Your branch is behind '%s' by %d commits\n",MainBranchName,Behind);
+            return e_LocalRepo_Deverged;
+        }
+
         Output=ShellAndGrab(buff);
         if(Output==NULL)
             cthrow("Failed to execute git command");
-
-        printf("On branch %s\n",CurrentBranchName);
-
-/* DEBUG PAUL: Should including this info: */
-//        printf("Your branch is ahead of 'xxx' by x commit");
 
         printf("Changes on this branch:\n");
 //        printf("        modified:  ");
@@ -585,6 +679,7 @@ int Do_BranchStatus(void)
     }
 
     free(MainBranchName);
+    free(CurrentBranchName);
 
     return RetValue;
 }
@@ -701,6 +796,69 @@ int Do_BranchBase(void)
     return RetValue;
 }
 
+int Do_BranchCreate(void)
+{
+    char buff[1000];
+    int Bytes;
+    int RetValue;
+
+    /* Do a: git checkout -b [name] */
+    RetValue=0;
+    ctry(const char *)
+    {
+        if(m_CmdsCount<3)
+            cthrow("Missing new branch name");
+        Bytes=snprintf(buff,sizeof(buff),"git checkout -b \"%s\"",m_Cmds[2]);
+        if(Bytes>sizeof(buff))
+            cthrow("Internal buffer to small");
+
+        ShellOut(buff);
+    }
+    ccatch(const char *Msg)
+    {
+        fprintf(stderr,"%s\n",Msg);
+        RetValue=1;
+    }
+
+    return RetValue;
+}
+
+int Do_BranchList(int OptionIndex)
+{
+    char buff[1000];
+    int Bytes;
+    int RetValue;
+    const char *Options;
+    int o;
+
+    /* Do a: git branch */
+    RetValue=0;
+    ctry(const char *)
+    {
+        Options="";
+
+        /* See if there is a -a option */
+        for(o=0;o<m_CmdOptionsCount[OptionIndex];o++)
+        {
+            if(strcmp(m_CmdOptions[OptionIndex][o],"-a")==0)
+                Options="-a";
+        }
+
+        Bytes=snprintf(buff,sizeof(buff),"git branch %s",Options);
+        if(Bytes>sizeof(buff))
+            cthrow("Internal buffer to small");
+
+        ShellOut(buff);
+    }
+    ccatch(const char *Msg)
+    {
+        fprintf(stderr,"%s\n",Msg);
+        RetValue=1;
+    }
+
+    return RetValue;
+}
+
 int Do_Revert(void)
 {
     char *CurrentBranchName;
@@ -712,6 +870,7 @@ int Do_Revert(void)
     bool RepoAsWell;
     const char *File2Restore;
 
+    CurrentBranchName=NULL;
     RetValue=0;
     ctry(const char *)
     {
@@ -762,6 +921,9 @@ int Do_Revert(void)
         fprintf(stderr,"%s\n",Msg);
         RetValue=1;
     }
+
+    free(CurrentBranchName);
+
     return RetValue;
 }
 
