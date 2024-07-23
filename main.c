@@ -1,3 +1,20 @@
+/*
+Add a git show for that last commit of a file (will need to lookup the commit
+id's that effect this file
+
+git difftool HEAD~3 Code/app/app0/Task_Cyclic10/Cals/PS_Cals/PS_CALS_Data.c
+
+Doesn't work 100% correctly (HEAD~3 is three commit on the branch not the file
+
+-----------------
+Add:
+    branch delete
+    branch delete -f (force)
+    branch delete -r (remote)
+https://stackoverflow.com/questions/2003505/how-do-i-delete-a-git-branch-locally-and-remotely
+
+*/
+
 /*******************************************************************************
  * FILENAME: main.c
  *
@@ -30,6 +47,22 @@ void restoreConsole(void);
 /*** DEFINES                  ***/
 #define BUFFER_GROW_SIZE    1000
 
+/* Version */
+#define SGIT_VERSION_MAJOR       0
+#define SGIT_VERSION_MINOR       2
+#define SGIT_VERSION_REV         0
+#define SGIT_VERSION_PATCH       0
+
+#define SGIT_VERSION ((SGIT_VERSION_MAJOR<<24) | \
+                    (SGIT_VERSION_MINOR<<16) | \
+                    (SGIT_VERSION_REV<<8)  | \
+                    (SGIT_VERSION_PATCH))
+
+#define VER_STR_HELPER(x) #x
+#define VER_STR(x) VER_STR_HELPER(x)
+
+#define SGIT_VERSION_STR  VER_STR(SGIT_VERSION_MAJOR) "." VER_STR(SGIT_VERSION_MINOR) "."  VER_STR(SGIT_VERSION_REV) "."  VER_STR(SGIT_VERSION_PATCH)
+
 /*** MACROS                   ***/
 
 /*** TYPE DEFINITIONS         ***/
@@ -41,6 +74,7 @@ typedef enum
     e_Cmd_BranchBase,
     e_Cmd_BranchCreate,
     e_Cmd_BranchList,
+    e_Cmd_BranchParent,
     e_Cmd_Info,
     e_Cmd_Diff,
     e_Cmd_VDiff,
@@ -49,6 +83,7 @@ typedef enum
     e_Cmd_Pull,
     e_Cmd_Push,
     e_Cmd_Uncommit,
+    e_Cmd_Commit,
     e_CmdMAX,
 } e_CmdType;
 
@@ -75,6 +110,7 @@ bool GetBranchCommitsCounts(int *Behind,int *Ahead,const char *MainBranchName,
 void Do_Status(void);
 int Do_BranchStatus(void);
 int Do_BranchCreate(void);
+int Do_BranchParent(void);
 int Do_BranchList(int OptionIndex);
 int Do_Info(void);
 int Do_ShowHelp(void);
@@ -102,20 +138,25 @@ int Do_ShowHelp(void)
     printf("    GlobalOptions -- These are options that apply to all sgit\n");
     printf("                     commands.  Supported options:\n");
     printf("                        --show -- Show the git commands being run\n");
+    printf("                        --version -- Show the version of sgit\n");
     printf("    command -- The main command to do.  It is one of the following:\n");
     printf("        info -- Get info about the repo\n");
     printf("        status (s) -- Get the current status of files\n");
     printf("        branch -- Commands that work on branches.  Supported sub commands:\n");
-    printf("            status -- Get a list of files that have been changed on the\n");
+    printf("            status (s) -- Get a list of files that have been changed on the\n");
     printf("                      current branch\n");
     printf("            base -- Get the hash of where the branch will merge from\n");
     printf("            create -- Make a new branch from the currently checked out branch.\n");
     printf("            list -- List currently available branches (-a to include server branches). This is the same as branches\n");
+//    printf("            diff -- Do a diff of this branch and the branchs parent branch.  And be followed by the filename for just that file\n");
+/* DEBUG PAUL: ^^^ git diff master... -- filename <- but you need the parent branch name */
+    printf("            parent -- Show the parent branch of the current branch\n");
     printf("        branches -- List currently available branches (-a to include server branches).\n");
     printf("        diff -- Do a git diff\n");
     printf("        vdiff -- Do a git visual diff (using extern diff tool)\n");
-    printf("        switch -- Change to a different branch\n");
+    printf("        switch (sw) -- Change to a different branch\n");
     printf("        revert -- Throw away any local changes (-a to throw away local commits as well)\n");
+    printf("        commit -- Commit staged changes to the repo\n");
     printf("        uncommit -- Pull the last commit back out to the working copy and delete the commit\n");
 //    printf("        regret -- I regret doing something, let me fix it.  Sub commands:\n");
 //    printf("            commit -- Pull the last commit back out to the working copy\n");
@@ -147,10 +188,20 @@ int main(int argc,const char *argv[])
                 /* Global options */
                 if(strcmp(argv[r],"--show")==0)
                     g_ShowGit=true;
-                if(strcmp(argv[r],"--help")==0)
+                else if(strcmp(argv[r],"--version")==0)
+                {
+                    printf("sgit version %s\n",SGIT_VERSION_STR);
+                    return 0;
+                }
+                else if(strcmp(argv[r],"--help")==0)
                 {
                     Do_ShowHelp();
                     return 0;
+                }
+                else
+                {
+                    printf("Unknown global option\n");
+                    return 1;
                 }
             }
             else
@@ -192,7 +243,7 @@ int main(int argc,const char *argv[])
     {
         Cmd=e_Cmd_Info;
     }
-    else if(strcmp(m_Cmds[0],"switch")==0)
+    else if(strcmp(m_Cmds[0],"switch")==0 || strcmp(m_Cmds[0],"sw")==0)
     {
         Cmd=e_Cmd_Switch;
     }
@@ -208,6 +259,10 @@ int main(int argc,const char *argv[])
     {
         Cmd=e_Cmd_Push;
     }
+    else if(strcmp(m_Cmds[0],"commit")==0)
+    {
+        Cmd=e_Cmd_Commit;
+    }
     else if(strcmp(m_Cmds[0],"uncommit")==0)
     {
         Cmd=e_Cmd_Uncommit;
@@ -220,6 +275,8 @@ int main(int argc,const char *argv[])
             Cmd=e_Cmd_BranchBase;
         if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"create")==0)
             Cmd=e_Cmd_BranchCreate;
+        if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"parent")==0)
+            Cmd=e_Cmd_BranchParent;
         if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"list")==0)
         {
             OptionIndex=1;
@@ -258,6 +315,9 @@ int main(int argc,const char *argv[])
         case e_Cmd_BranchCreate:
             RetValue=Do_BranchCreate();
         break;
+        case e_Cmd_BranchParent:
+            RetValue=Do_BranchParent();
+        break;
         case e_Cmd_BranchList:
             RetValue=Do_BranchList(OptionIndex);
         break;
@@ -278,6 +338,9 @@ int main(int argc,const char *argv[])
         break;
         case e_Cmd_Uncommit:
             RetValue=Do_UnCommit();
+        break;
+        case e_Cmd_Commit:
+            RetValue=Do_PassThough("commit");
         break;
         case e_CmdMAX:
         default:
@@ -578,13 +641,17 @@ int Do_BranchStatus(void)
     char *Str;
     char buff[1000];
     int Bytes;
-    char *MergeHash;
+    char *MergeHashResult;
+    char MergeHash[100];
     int RetValue;
     char *Output;
     char *p;
     char *StartOfLine;
     int Behind;
     int Ahead;
+    bool ShowMasterChanges;
+    bool ShowBranchChanges;
+    bool OutputLeftHanging;
 
     MainBranchName=NULL;
     CurrentBranchName=NULL;
@@ -593,6 +660,9 @@ int Do_BranchStatus(void)
     RetValue=0;
     ctry(const char *)
     {
+        ShowMasterChanges=false;
+        ShowBranchChanges=false;
+
         MainBranchName=GetMainBranchName();
         if(MainBranchName==NULL)
             cthrow("Failed to get main branch name");
@@ -606,9 +676,17 @@ int Do_BranchStatus(void)
         if(Bytes>sizeof(buff))
             cthrow("Internal buffer to small");
 
-        MergeHash=ShellAndGrab(buff);
-        if(MergeHash==NULL)
+        MergeHashResult=ShellAndGrab(buff);
+        if(MergeHashResult==NULL)
             cthrow("Out of memory");
+
+        if(strlen(MergeHashResult)>sizeof(MergeHash)-1)
+            cthrow("Internal hash buffer too small");
+        strcpy(MergeHash,MergeHashResult);
+        if(MergeHash[strlen(MergeHash)-1]=='\n')
+            MergeHash[strlen(MergeHash)-1]=0;
+        if(MergeHash[strlen(MergeHash)-1]=='\r')
+            MergeHash[strlen(MergeHash)-1]=0;
 
         Bytes=snprintf(buff,sizeof(buff),"git diff --name-only %s",MergeHash);
         if(Bytes>sizeof(buff))
@@ -629,47 +707,101 @@ int Do_BranchStatus(void)
         else if(Behind>0 && Ahead==0)
         {
             printf("Your branch is behind '%s' by %d commits\n",MainBranchName,Behind);
+            ShowMasterChanges=true;
         }
         else if(Behind==0 && Ahead>0)
         {
             printf("Your branch is ahead of '%s' by %d commits.\n",MainBranchName,Ahead);
+            ShowBranchChanges=true;
         }
         else
         {
             printf("Your branch and '%s' have diverged.\n",MainBranchName);
             printf("    Your branch is ahead of '%s' by %d commits.\n",MainBranchName,Ahead);
             printf("    Your branch is behind '%s' by %d commits\n",MainBranchName,Behind);
-            return e_LocalRepo_Deverged;
+            ShowBranchChanges=true;
+            ShowMasterChanges=true;
         }
 
         Output=ShellAndGrab(buff);
         if(Output==NULL)
             cthrow("Failed to execute git command");
 
-        printf("Changes on this branch:\n");
-//        printf("        modified:  ");
-        printf("                   ");
+        if(ShowBranchChanges)
+        {
+            printf("Changes on this branch:\n");
+//            printf("        modified:  ");
+            printf("                   ");
+            OutputLeftHanging=true;
 
 /* DEBUG PAUL: Would be nice to figure out what's changed /deleted / added and color them */
-        StartOfLine=Output;
-        for(p=Output;*p!=0;)
-        {
-            if(*p=='\n')
+            StartOfLine=Output;
+            for(p=Output;*p!=0;)
             {
-                /* Output this line */
-                *p=0;
-                printf("\33[34m%s\33[m\n",StartOfLine);
-
-                p=Skip2StartOfNextLine(p+1);
-                StartOfLine=p;
-                if(*p!=0)
+                if(*p=='\n')
                 {
-//                    printf("        modified:  ");
-                    printf("                   ");
+                    /* Output this line */
+                    *p=0;
+                    printf("\33[34m%s\33[m\n",StartOfLine);
+                    OutputLeftHanging=false;
+
+                    p=Skip2StartOfNextLine(p+1);
+                    StartOfLine=p;
+                    if(*p!=0)
+                    {
+//                        printf("        modified:  ");
+                        printf("                   ");
+                        OutputLeftHanging=true;
+                    }
+                    continue;
                 }
-                continue;
+                p++;
             }
-            p++;
+            if(OutputLeftHanging)
+                printf("\n");
+        }
+
+        if(ShowMasterChanges)
+        {
+            /* Show what files changed on master */
+            Bytes=snprintf(buff,sizeof(buff),"git diff --name-only %s..%s",
+                    MergeHash,MainBranchName);
+            if(Bytes>sizeof(buff))
+                cthrow("Internal buffer to small");
+
+            Output=ShellAndGrab(buff);
+            if(Output==NULL)
+                cthrow("Failed to execute git command");
+
+            printf("Changes on %s since last merge base:\n",MainBranchName);
+            printf("                   ");
+            OutputLeftHanging=true;
+
+/* DEBUG PAUL: Would be nice to figure out what's changed /deleted / added and color them */
+            StartOfLine=Output;
+            for(p=Output;*p!=0;)
+            {
+                if(*p=='\n')
+                {
+                    /* Output this line */
+                    *p=0;
+                    printf("\33[34m%s\33[m\n",StartOfLine);
+                    OutputLeftHanging=false;
+
+                    p=Skip2StartOfNextLine(p+1);
+                    StartOfLine=p;
+                    if(*p!=0)
+                    {
+    //                    printf("        modified:  ");
+                        printf("                   ");
+                        OutputLeftHanging=true;
+                    }
+                    continue;
+                }
+                p++;
+            }
+            if(OutputLeftHanging)
+                printf("\n");
         }
     }
     ccatch(const char *Msg)
@@ -734,8 +866,9 @@ int Do_PassThough(const char *GitCmd)
 
         for(r=1;r<m_CmdsCount;r++)
         {
+            strncat(buff,"\"",sizeof(buff));
             strncat(buff,m_Cmds[r],sizeof(buff));
-            strncat(buff," ",sizeof(buff));
+            strncat(buff,"\" ",sizeof(buff));
 
             for(o=0;o<m_CmdOptionsCount[r];o++)
             {
@@ -813,6 +946,105 @@ int Do_BranchCreate(void)
             cthrow("Internal buffer to small");
 
         ShellOut(buff);
+    }
+    ccatch(const char *Msg)
+    {
+        fprintf(stderr,"%s\n",Msg);
+        RetValue=1;
+    }
+
+    return RetValue;
+}
+
+int Do_BranchParent(void)
+{
+    char buff[1000];
+    int Bytes;
+    int RetValue;
+    char *Buffer;
+    char *CurrentBranchName;
+    char *CurrentLine;
+    char *BranchName;
+    char *EndOfLine;
+
+    /* DEBUG PAUL: Doesn't always seem to work..... */
+    /* https://stackoverflow.com/questions/3161204/how-to-find-the-nearest-parent-of-a-git-branch/68673744 */
+    /* Do a: git show-branch | grep '*' | grep -v "$(git rev-parse --abbrev-ref HEAD)" | head -n1 ' */
+    RetValue=0;
+    ctry(const char *)
+    {
+        CurrentBranchName=GetCurrentBranchName();
+        if(CurrentBranchName==NULL)
+            cthrow("Failed to get current branch name");
+
+        Buffer=ShellAndGrab("git show-branch -a");
+        if(Buffer==NULL)
+            cthrow("Failed to execute git show-branch");
+
+        /* Ok we:
+            - Only look at lines with a "*" on it before the "["
+            - Only look at lines that don't have the current branch name in between the []'s (stop at ~ or ^ in name)
+            - Take the first line that matchs above
+            - Take the name between the []'s (removing the ~ and ^ stuff)
+        */
+        CurrentLine=Buffer;
+        BranchName=NULL;
+        while(*CurrentLine!=0)
+        {
+            /* Find the branch name [] */
+            BranchName=strchr(CurrentLine,'[');
+            if(BranchName==NULL)
+            {
+                /* Not found, move to the next line */
+                while(*CurrentLine!='\n' && *CurrentLine!=0)
+                    CurrentLine++;
+                if(*CurrentLine==0)
+                {
+                    BranchName=NULL;
+                    break;
+                }
+                CurrentLine++;  // Move on the next char
+                if(*CurrentLine=='\r')
+                    CurrentLine++;
+                continue;
+            }
+            *BranchName=0;  // Make the stuff before the branch name into a string
+            BranchName++;
+            /* Find the end of the branch name */
+            EndOfLine=BranchName;
+            while(*EndOfLine!='~' && *EndOfLine!=']' && *EndOfLine!='^')
+                EndOfLine++;
+            *EndOfLine=0;   // Make the branch name a string
+            EndOfLine++;
+            /* Find the end of the line */
+            while(*EndOfLine!='\n' && EndOfLine!=0)
+                EndOfLine++;
+            if(*EndOfLine!=0)
+                EndOfLine++;
+            if(*EndOfLine=='\r')
+                EndOfLine++;
+
+            /* Process this line */
+            /* See if we have a '*' in the status */
+            if(strchr(CurrentLine,'*')!=NULL)
+            {
+                /* Make sure this isn't the current branch */
+                if(strcmp(BranchName,CurrentBranchName)!=0)
+                {
+                    /* Ok, this is our match (because this is the first time
+                       we got here) */
+                    break;
+                }
+            }
+
+            CurrentLine=EndOfLine;
+        }
+        if(BranchName==NULL)
+        {
+            /* Not found */
+            cthrow("Failed to find parent\n");
+        }
+        printf("%s\n",BranchName);
     }
     ccatch(const char *Msg)
     {
