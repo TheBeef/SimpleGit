@@ -13,6 +13,17 @@ Add:
     branch delete -r (remote)
 https://stackoverflow.com/questions/2003505/how-do-i-delete-a-git-branch-locally-and-remotely
 
+----------------
+Showing the last commit info for a file:
+    First try:
+#    git log --pretty=format:"%H" -2 Rakefile.rb
+    git log --pretty=format:"%H" -1 --skip 1 Rakefile.rb    # Get second last hash for this file
+    sgit vdiff HEAD ac9e8a299cf5d934c7813c80207b8d8e4a0e5fb5 Rakefile.rb
+
+    Second try:
+    git log -2 --pretty=format:"%H" master file.a   # Get the lastest hashs for file.a on the master branch
+    git difftool ####1 ####2 file.a
+
 */
 
 /*******************************************************************************
@@ -49,7 +60,7 @@ void restoreConsole(void);
 
 /* Version */
 #define SGIT_VERSION_MAJOR       0
-#define SGIT_VERSION_MINOR       2
+#define SGIT_VERSION_MINOR       3
 #define SGIT_VERSION_REV         0
 #define SGIT_VERSION_PATCH       0
 
@@ -84,6 +95,8 @@ typedef enum
     e_Cmd_Push,
     e_Cmd_Uncommit,
     e_Cmd_Commit,
+    e_Cmd_Clone,
+    e_Cmd_Rename,
     e_CmdMAX,
 } e_CmdType;
 
@@ -96,7 +109,18 @@ typedef enum
     e_LocalRepoMAX,
 } e_LocalRepoType;
 
+typedef enum
+{
+    e_BranchStatusOutputs_Mod,
+    e_BranchStatusOutputs_Rename,
+    e_BranchStatusOutputs_Add,
+    e_BranchStatusOutputs_Delete,
+    e_BranchStatusOutputs_Unknown,
+    e_BranchStatusOutputsMAX
+} e_BranchStatusOutputsType;
+
 /*** FUNCTION PROTOTYPES      ***/
+void ProcessBranchStatusResults(const char *Output,e_BranchStatusOutputsType Look4,const char *Title);
 bool GetRepoCommitsCounts(int *Behind,int *Ahead);
 char *FindLine(char *Buffer,char *Find);
 char *GetMainBranchName(void);
@@ -162,6 +186,8 @@ int Do_ShowHelp(void)
 //    printf("            commit -- Pull the last commit back out to the working copy\n");
     printf("        pull -- Do a git pull\n");
     printf("        push -- Do a git push\n");
+    printf("        clone -- Do a clone of a repo\n");
+    printf("        rename (mv) -- Rename a file\n");
 //    printf("        undo -- Check in a set of commits undoing commits\n");
     printf("    sub-commands -- Depends on 'command' (see above)\n");
 
@@ -288,6 +314,14 @@ int main(int argc,const char *argv[])
         OptionIndex=0;
         Cmd=e_Cmd_BranchList;
     }
+    else if(strcmp(m_Cmds[0],"clone")==0)
+    {
+        Cmd=e_Cmd_Clone;
+    }
+    else if(strcmp(m_Cmds[0],"rename")==0 || strcmp(m_Cmds[0],"mv")==0)
+    {
+        Cmd=e_Cmd_Rename;
+    }
 
     setupConsole();
 
@@ -341,6 +375,12 @@ int main(int argc,const char *argv[])
         break;
         case e_Cmd_Commit:
             RetValue=Do_PassThough("commit");
+        break;
+        case e_Cmd_Clone:
+            RetValue=Do_PassThough("clone");
+        break;
+        case e_Cmd_Rename:
+            RetValue=Do_PassThough("mv");
         break;
         case e_CmdMAX:
         default:
@@ -645,13 +685,11 @@ int Do_BranchStatus(void)
     char MergeHash[100];
     int RetValue;
     char *Output;
-    char *p;
     char *StartOfLine;
     int Behind;
     int Ahead;
     bool ShowMasterChanges;
     bool ShowBranchChanges;
-    bool OutputLeftHanging;
 
     MainBranchName=NULL;
     CurrentBranchName=NULL;
@@ -688,7 +726,7 @@ int Do_BranchStatus(void)
         if(MergeHash[strlen(MergeHash)-1]=='\r')
             MergeHash[strlen(MergeHash)-1]=0;
 
-        Bytes=snprintf(buff,sizeof(buff),"git diff --name-only %s",MergeHash);
+        Bytes=snprintf(buff,sizeof(buff),"git diff --name-status --find-renames %s",MergeHash);
         if(Bytes>sizeof(buff))
             cthrow("Internal buffer to small");
 
@@ -730,41 +768,19 @@ int Do_BranchStatus(void)
         if(ShowBranchChanges)
         {
             printf("Changes on this branch:\n");
-//            printf("        modified:  ");
-            printf("                   ");
-            OutputLeftHanging=true;
 
-/* DEBUG PAUL: Would be nice to figure out what's changed /deleted / added and color them */
-            StartOfLine=Output;
-            for(p=Output;*p!=0;)
-            {
-                if(*p=='\n')
-                {
-                    /* Output this line */
-                    *p=0;
-                    printf("\33[34m%s\33[m\n",StartOfLine);
-                    OutputLeftHanging=false;
-
-                    p=Skip2StartOfNextLine(p+1);
-                    StartOfLine=p;
-                    if(*p!=0)
-                    {
-//                        printf("        modified:  ");
-                        printf("                   ");
-                        OutputLeftHanging=true;
-                    }
-                    continue;
-                }
-                p++;
-            }
-            if(OutputLeftHanging)
-                printf("\n");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Add,"\33[32mnew file");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Delete,"\33[31mdeleted");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Rename,"\33[33mrenamed");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Mod,"\33[34mmodified");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Unknown,"[33[35munknown change");
+            printf("\33[m");
         }
 
         if(ShowMasterChanges)
         {
             /* Show what files changed on master */
-            Bytes=snprintf(buff,sizeof(buff),"git diff --name-only %s..%s",
+            Bytes=snprintf(buff,sizeof(buff),"git diff --name-status --find-renames %s..%s",
                     MergeHash,MainBranchName);
             if(Bytes>sizeof(buff))
                 cthrow("Internal buffer to small");
@@ -774,34 +790,13 @@ int Do_BranchStatus(void)
                 cthrow("Failed to execute git command");
 
             printf("Changes on %s since last merge base:\n",MainBranchName);
-            printf("                   ");
-            OutputLeftHanging=true;
 
-/* DEBUG PAUL: Would be nice to figure out what's changed /deleted / added and color them */
-            StartOfLine=Output;
-            for(p=Output;*p!=0;)
-            {
-                if(*p=='\n')
-                {
-                    /* Output this line */
-                    *p=0;
-                    printf("\33[34m%s\33[m\n",StartOfLine);
-                    OutputLeftHanging=false;
-
-                    p=Skip2StartOfNextLine(p+1);
-                    StartOfLine=p;
-                    if(*p!=0)
-                    {
-    //                    printf("        modified:  ");
-                        printf("                   ");
-                        OutputLeftHanging=true;
-                    }
-                    continue;
-                }
-                p++;
-            }
-            if(OutputLeftHanging)
-                printf("\n");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Add,"\33[32mnew file");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Delete,"\33[31mdeleted");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Rename,"\33[33mrenamed");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Mod,"\33[34mmodified");
+            ProcessBranchStatusResults(Output,e_BranchStatusOutputs_Unknown,"[33[35munknown change");
+            printf("\33[m");
         }
     }
     ccatch(const char *Msg)
@@ -816,8 +811,92 @@ int Do_BranchStatus(void)
     return RetValue;
 }
 
+void ProcessBranchStatusResults(const char *Output,e_BranchStatusOutputsType Look4,const char *Title)
+{
+    const char *StartOfLine;
+    const char *p;
+    const char *end;
+    bool Process;
+    bool First;
 
+    First=true;
+    StartOfLine=Output;
+    for(p=Output;*p!=0;)
+    {
+        /* First comes the type of change */
+        Process=false;
+        switch(Look4)
+        {
+            case e_BranchStatusOutputs_Mod:
+                if(*p=='M')
+                    Process=true;
+            break;
+            case e_BranchStatusOutputs_Rename:
+                if(*p=='R')
+                    Process=true;
+            break;
+            case e_BranchStatusOutputs_Add:
+                if(*p=='A')
+                    Process=true;
+            break;
+            case e_BranchStatusOutputs_Delete:
+                if(*p=='D')
+                    Process=true;
+            break;
+            case e_BranchStatusOutputs_Unknown:
+                if(*p!='M' && *p!='R' && *p!='A' && *p!='D')
+                    Process=true;
+            break;
+            case e_BranchStatusOutputsMAX:
+            break;
+        }
+        if(!Process)
+        {
+            /* Skip this line */
+            while(*p!=0 && *p!='\n')
+                p++;
+            while(*p=='\n' || *p=='\r')
+                p++;
+            continue;
+        }
 
+        /* Skip any chars that are not a space */
+        while(*p!=' ' && *p!='\t' && *p!=0)
+            p++;
+        if(*p==0)
+            break;
+        /* Skip the spaces */
+        while(*p==' ' || *p=='\t')
+            p++;
+        if(*p==0)
+            break;
+
+        /* We are at the start of the filename */
+        if(First)
+        {
+            printf("        %s:\n",Title);
+            First=false;
+        }
+        printf("                   ");
+        while(*p!=0 && *p!=' ' && *p!='\t' && *p!='\r' && *p!='\n')
+        {
+            printf("%c",*p);
+            p++;
+        }
+        if(Look4==e_BranchStatusOutputs_Rename)
+        {
+            printf(" -> ");
+            while(*p==' ' || *p=='\t')
+                p++;
+            while(*p!=0 && *p!=' ' && *p!='\t' && *p!='\r' && *p!='\n')
+            {
+                printf("%c",*p);
+                p++;
+            }
+        }
+        printf("\n");
+    }
+}
 
 int Do_Info(void)
 {
