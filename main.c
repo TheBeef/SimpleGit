@@ -51,8 +51,6 @@ Showing the last commit info for a file:
 #include "trycatch.h"
 #ifdef WIN32
  #include <windows.h>
-void setupConsole(void);
-void restoreConsole(void);
 #endif
 
 /*** DEFINES                  ***/
@@ -120,6 +118,8 @@ typedef enum
 } e_BranchStatusOutputsType;
 
 /*** FUNCTION PROTOTYPES      ***/
+void setupConsole(void);
+void restoreConsole(void);
 void ProcessBranchStatusResults(const char *Output,e_BranchStatusOutputsType Look4,const char *Title);
 bool GetRepoCommitsCounts(int *Behind,int *Ahead);
 char *FindLine(char *Buffer,char *Find);
@@ -438,6 +438,15 @@ void restoreConsole(void)
         exit(GetLastError());
     }
 }
+#else
+void setupConsole(void)
+{
+}
+
+void restoreConsole(void)
+{
+}
+
 #endif
 
 char *GetMainBranchName(void)
@@ -596,9 +605,16 @@ char *ShellAndGrab(const char *Cmd)
     /* Open the command for reading. */
     if(g_ShowGit)
         printf("\33[35m%s\33[m\n",Cmd);
-    fp=popen(Cmd,"rb");
+#ifdef WIN32
+    fp=popen(Cmd,"rb"); // Don't know if we need the 'b' in Windows or not, but it messes with Linux so...
+#else
+    fp=popen(Cmd,"r");
+#endif
     if(fp==NULL)
+    {
+        printf("Fail here\n");
         return NULL;
+    }
 
     if(m_ShellAndGrabBuffer==NULL)
     {
@@ -939,20 +955,20 @@ int Do_PassThough(const char *GitCmd)
 
         for(o=0;o<m_CmdOptionsCount[0];o++)
         {
-            strncat(buff,m_CmdOptions[0][o],sizeof(buff));
-            strncat(buff," ",sizeof(buff));
+            strncat(buff,m_CmdOptions[0][o],sizeof(buff)-1);
+            strncat(buff," ",sizeof(buff)-1);
         }
 
         for(r=1;r<m_CmdsCount;r++)
         {
-            strncat(buff,"\"",sizeof(buff));
-            strncat(buff,m_Cmds[r],sizeof(buff));
-            strncat(buff,"\" ",sizeof(buff));
+            strncat(buff,"\"",sizeof(buff)-1);
+            strncat(buff,m_Cmds[r],sizeof(buff)-1);
+            strncat(buff,"\" ",sizeof(buff)-1);
 
             for(o=0;o<m_CmdOptionsCount[r];o++)
             {
-                strncat(buff,m_CmdOptions[r][o],sizeof(buff));
-                strncat(buff," ",sizeof(buff));
+                strncat(buff,m_CmdOptions[r][o],sizeof(buff)-1);
+                strncat(buff," ",sizeof(buff)-1);
             }
         }
         ShellOut(buff);
