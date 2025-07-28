@@ -1,4 +1,22 @@
 /*
+Adding an local alias.
+
+Local alias's will let you add an alias for branches (and maybe hashs? tags? other things?).
+
+sgit local alias set [name] [value]
+sgit local alias list
+sgit local alias delete [name]
+
+Still to do:
+ * Delete
+ * Change load so it adds them in ABC order
+ * Make them actually do something...
+ * Change to local instead of just alias
+
+
+
+----
+
 Add a git show for that last commit of a file (will need to lookup the commit
 id's that effect this file
 
@@ -23,6 +41,10 @@ Showing the last commit info for a file:
     Second try:
     git log -2 --pretty=format:"%H" master file.a   # Get the lastest hashs for file.a on the master branch
     git difftool ####1 ####2 file.a
+
+==== Clean up branches ====
+ * git remote update origin --prune
+ * git fetch --prune
 
 */
 
@@ -51,6 +73,11 @@ Showing the last commit info for a file:
 #include "trycatch.h"
 #ifdef WIN32
  #include <windows.h>
+ #include <shlobj.h>
+#else
+ #include <unistd.h>
+ #include <sys/types.h>
+ #include <pwd.h>
 #endif
 
 /*** DEFINES                  ***/
@@ -58,7 +85,7 @@ Showing the last commit info for a file:
 
 /* Version */
 #define SGIT_VERSION_MAJOR       0
-#define SGIT_VERSION_MINOR       3
+#define SGIT_VERSION_MINOR       4
 #define SGIT_VERSION_REV         0
 #define SGIT_VERSION_PATCH       0
 
@@ -84,6 +111,8 @@ typedef enum
     e_Cmd_BranchCreate,
     e_Cmd_BranchList,
     e_Cmd_BranchParent,
+    e_Cmd_BranchDiff,
+    e_Cmd_BranchVDiff,
     e_Cmd_Info,
     e_Cmd_Diff,
     e_Cmd_VDiff,
@@ -95,6 +124,9 @@ typedef enum
     e_Cmd_Commit,
     e_Cmd_Clone,
     e_Cmd_Rename,
+//    e_Cmd_SetAlias,
+//    e_Cmd_ListAliases,
+//    e_Cmd_DeleteAlias,
     e_CmdMAX,
 } e_CmdType;
 
@@ -117,7 +149,19 @@ typedef enum
     e_BranchStatusOutputsMAX
 } e_BranchStatusOutputsType;
 
+//struct Alias
+//{
+//    char *Name;
+//    char *Value;
+//    struct Alias *Next;
+//};
+
 /*** FUNCTION PROTOTYPES      ***/
+//void SaveAliases(void);
+//const char *GetAlias(const char *Name);
+//const char *GetAliasedAs(const char *Value);
+//void FreeAliases(void);
+const char *GetLocalStoragePath(const char *Filename);
 void setupConsole(void);
 void restoreConsole(void);
 void ProcessBranchStatusResults(const char *Output,e_BranchStatusOutputsType Look4,const char *Title);
@@ -125,6 +169,7 @@ bool GetRepoCommitsCounts(int *Behind,int *Ahead);
 char *FindLine(char *Buffer,char *Find);
 char *GetMainBranchName(void);
 char *GetCurrentBranchName(void);
+const char *GetParentBranchName(const char *BranchToLookup);
 char *ShellAndGrab(const char *Cmd);
 int ShellOut(const char *cmd);
 char *Skip2StartOfNextLine(char *p);
@@ -140,10 +185,17 @@ int Do_Info(void);
 int Do_ShowHelp(void);
 int Do_PassThough(const char *GitCmd);
 int Do_BranchBase(void);
+int Do_BranchVDiff(void);
+int Do_BranchDiff(void);
 int Do_Revert(void);
 int Do_UnCommit(void);
+//int Do_ListAliases(void);
+//int Do_SetAlias(void);
 
 /*** VARIABLE DEFINITIONS     ***/
+//bool g_AliasLoadedTried=false;
+//struct Alias *g_AliasList=NULL;
+
 bool g_ShowGit;
 char *m_ShellAndGrabBuffer;
 unsigned int m_ShellAndGrabBufferSize;
@@ -175,6 +227,10 @@ int Do_ShowHelp(void)
 //    printf("            diff -- Do a diff of this branch and the branchs parent branch.  And be followed by the filename for just that file\n");
 /* DEBUG PAUL: ^^^ git diff master... -- filename <- but you need the parent branch name */
     printf("            parent -- Show the parent branch of the current branch\n");
+    printf("            diff -- Show the changes that where made to this branch\n");
+    printf("                    You can follow this with a file name to just\n");
+    printf("                    show that files differences\n");
+    printf("            vdiff -- The same as 'diff' but visual diff\n");
     printf("        branches -- List currently available branches (-a to include server branches).\n");
     printf("        diff -- Do a git diff\n");
     printf("        vdiff -- Do a git visual diff (using extern diff tool)\n");
@@ -188,6 +244,9 @@ int Do_ShowHelp(void)
     printf("        push -- Do a git push\n");
     printf("        clone -- Do a clone of a repo\n");
     printf("        rename (mv) -- Rename a file\n");
+    printf("        local alias set (add) -- Add / change an alias\n");
+    printf("        local alias list -- List current aliases\n");
+    printf("        local alias delete -- Remove an alias\n");
 //    printf("        undo -- Check in a set of commits undoing commits\n");
     printf("    sub-commands -- Depends on 'command' (see above)\n");
 
@@ -308,6 +367,10 @@ int main(int argc,const char *argv[])
             OptionIndex=1;
             Cmd=e_Cmd_BranchList;
         }
+        if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"diff")==0)
+            Cmd=e_Cmd_BranchDiff;
+        if(m_CmdsCount>=2 && strcmp(m_Cmds[1],"vdiff")==0)
+            Cmd=e_Cmd_BranchVDiff;
     }
     else if(strcmp(m_Cmds[0],"branches")==0)
     {
@@ -322,6 +385,18 @@ int main(int argc,const char *argv[])
     {
         Cmd=e_Cmd_Rename;
     }
+//    else if(strcmp(m_Cmds[0],"local")==0)
+//    {
+//        if(strcmp(m_Cmds[1],"alias")==0)
+//        {
+//            if(m_CmdsCount>=3 && (strcmp(m_Cmds[2],"set")==0 || strcmp(m_Cmds[2],"add")==0))
+//                Cmd=e_Cmd_SetAlias;
+//            if(m_CmdsCount>=3 && strcmp(m_Cmds[2],"list")==0)
+//                Cmd=e_Cmd_ListAliases;
+//            if(m_CmdsCount>=3 && strcmp(m_Cmds[2],"delete")==0)
+//                Cmd=e_Cmd_DeleteAlias;
+//        }
+//    }
 
     setupConsole();
 
@@ -351,6 +426,12 @@ int main(int argc,const char *argv[])
         break;
         case e_Cmd_BranchParent:
             RetValue=Do_BranchParent();
+        break;
+        case e_Cmd_BranchDiff:
+            RetValue=Do_BranchDiff();
+        break;
+        case e_Cmd_BranchVDiff:
+            RetValue=Do_BranchVDiff();
         break;
         case e_Cmd_BranchList:
             RetValue=Do_BranchList(OptionIndex);
@@ -382,6 +463,14 @@ int main(int argc,const char *argv[])
         case e_Cmd_Rename:
             RetValue=Do_PassThough("mv");
         break;
+//        case e_Cmd_SetAlias:
+//            RetValue=Do_SetAlias();
+//        break;
+//        case e_Cmd_ListAliases:
+//            RetValue=Do_ListAliases();
+//        break;
+//        case e_Cmd_DeleteAlias:
+//        break;
         case e_CmdMAX:
         default:
             printf("Unknown command\n");
@@ -393,8 +482,68 @@ int main(int argc,const char *argv[])
     if(m_ShellAndGrabBuffer!=NULL)
         free(m_ShellAndGrabBuffer);
 
+//    FreeAliases();
+
     return RetValue;
 }
+
+#ifdef WIN32
+const char *GetLocalStoragePath(const char *Filename)
+{
+    static char szPath[MAX_PATH];
+
+    // Get path for each computer, non-user specific and non-roaming data.
+    if(SHGetFolderPathA(NULL,CSIDL_APPDATA,NULL,0,szPath)==S_OK)
+    {
+        // Append product-specific path
+        strncat(szPath,"\\sgit\\",sizeof(szPath)-1);
+        if(strlen(szPath)>=sizeof(szPath)-1)
+            return NULL;
+
+        CreateDirectoryA(szPath,NULL);
+
+        strncat(szPath,Filename,sizeof(szPath)-1);
+        if(strlen(szPath)>=sizeof(szPath)-1)
+            return NULL;
+    }
+    else
+    {
+        return NULL;
+    }
+
+    return szPath;
+}
+#else
+
+const char *GetLocalStoragePath(const char *Filename)
+{
+    static char Path[1000];
+    const char *homedir;
+
+    homedir=getenv("HOME");
+    if(homedir==NULL)
+        homedir=getpwuid(getuid())->pw_dir;
+
+    strncpy(Path,homedir,sizeof(Path)-1);
+    Path[sizeof(Path)-1]=0;
+    strncat(Path,"/.config/",sizeof(Path)-1);
+    if(strlen(Path)>=sizeof(Path)-1)
+        return NULL;
+    mkdir(Path,S_IRWXU|S_IRWXG|S_IRWXO);
+
+    strncat(Path,"sgit/",sizeof(Path)-1);
+    if(strlen(Path)>=sizeof(Path)-1)
+        return NULL;
+    mkdir(Path,S_IRWXU|S_IRWXG|S_IRWXO);
+
+    strncat(Path,Filename,sizeof(Path)-1);
+    if(strlen(Path)>=sizeof(Path)-1)
+        return NULL;
+
+    return Path;
+}
+
+#endif
 
 #ifdef WIN32
  // Some old MinGW/CYGWIN distributions don't define this:
@@ -476,6 +625,171 @@ char *GetMainBranchName(void)
     return RetStr;
 }
 
+const char *GetParentBranchName(const char *BranchToLookup)
+{
+    char buff[1000];
+    int Bytes;
+    const char *RetValue;
+    char RetBuff[1000];
+    char *Buffer;
+    const char *CurrentBranchName;
+    char *Pos;
+    char *CurrentLine;
+    char *BranchName;
+    char *EndOfLine;
+    bool Found;
+    bool ThisBranchFound;
+    bool ParentBranchFound;
+
+    /* DEBUG PAUL: Doesn't always seem to work..... */
+    /* https://stackoverflow.com/questions/3161204/how-to-find-the-nearest-parent-of-a-git-branch/68673744 */
+    /* Do a: git show-branch | grep '*' | grep -v "$(git rev-parse --abbrev-ref HEAD)" | head -n1 ' */
+    RetValue=NULL;
+    ctry(const char *)
+    {
+        if(BranchToLookup==NULL)
+        {
+            CurrentBranchName=GetCurrentBranchName();
+            if(CurrentBranchName==NULL)
+                cthrow("Failed to get current branch name");
+        }
+        else
+        {
+            CurrentBranchName=BranchToLookup;
+        }
+
+        Buffer=ShellAndGrab("git show-branch -a");
+        if(Buffer==NULL)
+            cthrow("Failed to execute git show-branch");
+
+        /* Ok, this seems to be the way this works:
+            The command lists all the branches that are related to the current
+              branch.  It lists then above a ---- line with a * before the
+              current head, and ! before other heads.  After the ---- line
+              it list all the branches in order of creation with a + sign
+              beside it when it's effected by the head above.  It also uses
+              a * to mark that this branch is the effected.
+
+           So we:
+            - Find the ---- line
+            - Only process lines that have a * before the [
+            - Find our branch in the list
+            - Return the next branch name after that (that also starts with a
+              star).
+
+            ! [master] First
+             ! [A] Added on branch A
+              * [B] Changed on B
+               ! [origin/A] Added on branch A
+                ! [origin/B] Changed on B
+                 ! [origin/master] First
+            ------
+              * +  [B] Changed on B
+             +*++  [A] Added on branch A
+            ++*+++ [master] First
+
+            [] -- The name of the branch
+            * -- An important branch
+
+        */
+        /* First find the ------ line */
+        Pos=Buffer;
+        while(*Pos!=0)
+        {
+            if(strncmp(Pos,"------",6)==0)
+                break;
+            Pos++;
+        }
+        if(*Pos==0)
+        {
+            /* Didn't find the --- line */
+            cthrow("Failed to parse the show-branch output");
+        }
+
+        /* Move to the next line */
+        while(*Pos!=0 && *Pos!='\n')
+            Pos++;
+
+        if(*Pos==0)
+            cthrow("Failed to parse the show-branch output");
+
+        Pos++;
+        CurrentLine=Pos;
+        BranchName=NULL;
+        ThisBranchFound=false;
+        ParentBranchFound=false;
+        while(*CurrentLine!=0)
+        {
+            /* See if it starts with a '*' */
+            Pos=CurrentLine;
+            Found=false;
+            while(*Pos!=0 && *Pos!='\n' && *Pos!='[')
+            {
+                if(*Pos=='*')
+                    Found=true;
+                Pos++;
+            }
+
+            if(*Pos==0 || *Pos=='\n' || !Found)
+            {
+                /* We didn't find a '*', skip the end of the line */
+                goto NextLine;
+            }
+
+            /* Ok, this is an important line, extract the branch name */
+            BranchName=Pos+1;
+            while(*Pos!=0 && *Pos!=']' && *Pos!='~' && *Pos!='^')
+                Pos++;
+            if(*Pos==0)
+                goto NextLine;
+            *Pos=0; // Branch is a string
+
+            CurrentLine=Pos+1;  // Move the start of the line after the branch name
+
+            /* Ok, see if this is the current branch */
+            if(strcmp(BranchName,CurrentBranchName)==0)
+            {
+                /* Yep, grab the next one */
+                ThisBranchFound=true;
+            }
+            else
+            {
+                if(ThisBranchFound)
+                {
+                    /* This is the entry after the current branch return this
+                       one */
+                    ParentBranchFound=true;
+                    break;
+                }
+            }
+
+NextLine:
+            /* Move to the next line */
+            while(*CurrentLine!=0 && *CurrentLine!='\n')
+                CurrentLine++;
+            if(*CurrentLine=='\n')
+                CurrentLine++;
+        }
+
+        if(!ParentBranchFound)
+        {
+            /* Not found */
+            cthrow("Failed to find parent branch\n");
+        }
+        strncpy(RetBuff,BranchName,sizeof(RetBuff)-1);
+        RetBuff[sizeof(RetBuff)-1]=0;
+        RetValue=RetBuff;
+    }
+    ccatch(const char *Msg)
+    {
+        fprintf(stderr,"%s\n",Msg);
+        RetValue=NULL;
+    }
+
+    return RetValue;
+}
+
+
 void rtrim(char *Str)
 {
     char *p;
@@ -488,6 +802,142 @@ void rtrim(char *Str)
         p--;
     }
 }
+
+//void LoadAliases(void)
+//{
+//    const char *Filename;
+//    FILE *in;
+//    char LineBuff[200];
+//    char *Name;
+//    char *Value;
+//    char *p;
+//    struct Alias *NewAlias;
+//
+//    /* Even if we fail we don't want to try again */
+//    g_AliasLoadedTried=true;
+//
+//    Filename=GetLocalStoragePath("Aliases");
+//    if(Filename==NULL)
+//        return;
+//
+//    in=fopen(Filename,"r");
+//    if(in==NULL)
+//        return;
+//
+//    ctry(const char *)
+//    {
+//        while(fgets(LineBuff,sizeof(LineBuff),in)!=NULL)
+//        {
+//            /* Break the line up.  Format is:
+//                Name=Value\n
+//            */
+//            Name=LineBuff;
+//            Value=strchr(Name,'=');
+//            if(Value==NULL)
+//                cthrow("Alias file is incorrectly formated");
+//            *Value=0;
+//            Value++;
+//            p=Value;
+//            while(*p!=0)
+//            {
+//                if(*p=='\n')
+//                    *p=0;
+//                p++;
+//            }
+//
+//            /* Allocate an entry for this alias */
+//            NewAlias=malloc(sizeof(struct Alias));
+//            if(NewAlias==NULL)
+//                cthrow("Out of memory");
+//
+//            NewAlias->Name=malloc(strlen(Name)+1);
+//            if(NewAlias->Name==NULL)
+//                cthrow("Out of memory");
+//
+//            NewAlias->Value=malloc(strlen(Value)+1);
+//            if(NewAlias->Value==NULL)
+//                cthrow("Out of memory");
+//
+//            strcpy(NewAlias->Name,Name);
+//            strcpy(NewAlias->Value,Value);
+//
+//            NewAlias->Next=g_AliasList;
+//            g_AliasList=NewAlias;
+//        }
+//    }
+//    ccatch(const char *Msg)
+//    {
+//        fprintf(stderr,"Failed to load alias's:%s\n",Msg);
+//    }
+//
+//    fclose(in);
+//}
+
+//void SaveAliases(void)
+//{
+//    const char *Filename;
+//    FILE *out;
+//    struct Alias *a;
+//
+//    Filename=GetLocalStoragePath("Aliases");
+//    if(Filename==NULL)
+//        return;
+//
+//    out=fopen(Filename,"w");
+//    if(out==NULL)
+//        return;
+//
+//    for(a=g_AliasList;a!=NULL;a=a->Next)
+//        fprintf(out,"%s=%s\n",a->Name,a->Value);
+//
+//    fclose(out);
+//}
+
+//void FreeAliases(void)
+//{
+//    struct Alias *TmpAliasPtr;
+//
+//    while(g_AliasList!=NULL)
+//    {
+//        TmpAliasPtr=g_AliasList->Next;
+//        free(g_AliasList);
+//        g_AliasList=TmpAliasPtr;
+//    }
+//}
+
+//const char *GetAlias(const char *Name)
+//{
+//    struct Alias *s;
+//
+//    if(!g_AliasLoadedTried)
+//        LoadAliases();
+//
+//    for(s=g_AliasList;s!=NULL;s=s->Next)
+//    {
+//        if(strcasecmp(s->Name,Name)==0)
+//            break;
+//    }
+//    if(s==NULL)
+//        return NULL;
+//    return s->Value;
+//}
+
+//const char *GetAliasedAs(const char *Value)
+//{
+//    struct Alias *s;
+//
+//    if(!g_AliasLoadedTried)
+//        LoadAliases();
+//
+//    for(s=g_AliasList;s!=NULL;s=s->Next)
+//    {
+//        if(strcasecmp(s->Value,Value)==0)
+//            break;
+//    }
+//    if(s==NULL)
+//        return NULL;
+//    return s->Name;
+//}
 
 char *GetCurrentBranchName(void)
 {
@@ -1156,10 +1606,19 @@ int Do_BranchList(int OptionIndex)
     int Bytes;
     int RetValue;
     const char *Options;
+    char *CurrentBranchName;
     int o;
+    char *Output;
+    char *p;
+    bool StartOfLine;
+    char *BranchName;
+    char *ArrowStart;
+    bool StarFound;
+//    const char *AliasedAs;
 
     /* Do a: git branch */
     RetValue=0;
+    CurrentBranchName=NULL;
     ctry(const char *)
     {
         Options="";
@@ -1171,7 +1630,148 @@ int Do_BranchList(int OptionIndex)
                 Options="-a";
         }
 
+        CurrentBranchName=GetCurrentBranchName();
+
         Bytes=snprintf(buff,sizeof(buff),"git branch %s",Options);
+        if(Bytes>sizeof(buff))
+            cthrow("Internal buffer to small");
+
+//        ShellOut(buff);
+
+//        Bytes=snprintf(buff,sizeof(buff),"git branch --format=%%(refname:short) %s",Options);
+//        if(Bytes>sizeof(buff))
+//            cthrow("Internal buffer to small");
+
+        Output=ShellAndGrab(buff);
+
+//        printf("%s\n",Output);
+        /* Walk each line looking for any aliases */
+        p=Output;
+        while(*p!=0)
+        {
+            ArrowStart=NULL;
+            StarFound=false;
+
+            /* We are at the start of the line, search for the first non space */
+            while(*p==' ' || *p=='\t')
+                p++;
+
+            if(*p==0)
+                continue;
+
+            if(*p=='*')
+            {
+                StarFound=true;
+                p++;
+                /* Continue */
+                while(*p==' ' || *p=='\t')
+                    p++;
+            }
+
+            /* We should be at the branch name */
+            BranchName=p;
+
+            /* Find the next space or end of line */
+            while(*p!=' ' && *p!='\t' && *p!='\n' && *p!='\r' && *p!=0)
+                p++;
+
+            /* We are now at the end name */
+            if(*p==0)
+            {
+                /* End of string */
+            }
+            else if(*p!='\n' && *p!='\r')
+            {
+                *p=0;
+                p++;
+                /* Now see if there is any thing else after the name */
+                while(*p==' ' || *p=='\t')
+                {
+                    printf("'%c'\n",*p);
+                    p++;
+                }
+                if(*p=='-' && *(p+1)=='>')
+                {
+                    /* We found an arrow */
+                    ArrowStart=p;
+                }
+                /* Skip to the end of the line */
+                while(*p!='\n' && *p!='\r' && *p!=0)
+                    p++;
+                *p=0;
+                p++;
+            }
+            else
+            {
+                *p=0;
+                p++;
+            }
+
+            /* Move to the next line */
+            while(*p=='\n' || *p=='\r')
+                p++;
+
+            /* Output this line */
+            if(StarFound)
+                printf("* ");
+            else
+                printf("  ");
+            if(strcmp(CurrentBranchName,BranchName)==0)
+                printf("\33[32m");
+            if(strncmp(BranchName,"remotes/",8)==0)
+                printf("\33[31m");
+            printf("%s\33[m",BranchName);
+
+//            /* See if this branch is in the alias list */
+//            AliasedAs=GetAliasedAs(BranchName);
+//            if(AliasedAs!=NULL)
+//                printf("  (%s)",AliasedAs);
+
+            if(ArrowStart!=NULL)
+                printf(" %s",ArrowStart);
+            printf("\n");
+        }
+    }
+    ccatch(const char *Msg)
+    {
+        fprintf(stderr,"%s\n",Msg);
+        RetValue=1;
+    }
+
+    if(CurrentBranchName!=NULL)
+        free(CurrentBranchName);
+
+    return RetValue;
+}
+
+int Do_BranchDiff(void)
+{
+    char buff[1000];
+    int Bytes;
+    int RetValue;
+    const char *ParentBranch;
+    const char *CurrentBranch;
+    char Filename[1000];
+
+    /* Do a: git diff branch1 branch2 [filename] */
+    RetValue=0;
+    ctry(const char *)
+    {
+        *Filename=0;
+        if(m_CmdsCount>=3)
+        {
+            /* We have an optional filename */
+            Bytes=snprintf(Filename,sizeof(Filename),"\"%s\"",m_Cmds[2]);
+            if(Bytes>sizeof(Filename))
+                cthrow("Internal buffer to small");
+        }
+        CurrentBranch=GetCurrentBranchName();
+        ParentBranch=GetParentBranchName(NULL);
+        if(ParentBranch==NULL)
+            cthrow(NULL);
+
+        Bytes=snprintf(buff,sizeof(buff),"git diff \"%s\" \"%s\" %s",
+                CurrentBranch,ParentBranch,Filename);
         if(Bytes>sizeof(buff))
             cthrow("Internal buffer to small");
 
@@ -1179,7 +1779,51 @@ int Do_BranchList(int OptionIndex)
     }
     ccatch(const char *Msg)
     {
-        fprintf(stderr,"%s\n",Msg);
+        if(Msg!=NULL)
+            fprintf(stderr,"%s\n",Msg);
+        RetValue=1;
+    }
+
+    return RetValue;
+}
+
+int Do_BranchVDiff(void)
+{
+    char buff[1000];
+    int Bytes;
+    int RetValue;
+    const char *ParentBranch;
+    const char *CurrentBranch;
+    char Filename[1000];
+
+    /* Do a: git diff branch1 branch2 [filename] */
+    RetValue=0;
+    ctry(const char *)
+    {
+        *Filename=0;
+        if(m_CmdsCount>=3)
+        {
+            /* We have an optional filename */
+            Bytes=snprintf(Filename,sizeof(Filename),"\"%s\"",m_Cmds[2]);
+            if(Bytes>sizeof(Filename))
+                cthrow("Internal buffer to small");
+        }
+        CurrentBranch=GetCurrentBranchName();
+        ParentBranch=GetParentBranchName(NULL);
+        if(ParentBranch==NULL)
+            cthrow(NULL);
+
+        Bytes=snprintf(buff,sizeof(buff),"git difftool \"%s\" \"%s\" %s",
+                CurrentBranch,ParentBranch,Filename);
+        if(Bytes>sizeof(buff))
+            cthrow("Internal buffer to small");
+
+        ShellOut(buff);
+    }
+    ccatch(const char *Msg)
+    {
+        if(Msg!=NULL)
+            fprintf(stderr,"%s\n",Msg);
         RetValue=1;
     }
 
@@ -1254,6 +1898,8 @@ int Do_Revert(void)
     return RetValue;
 }
 
+/* DEBUG PAUL: Does this work if the branch you are on has not been pushed to
+   the server??? */
 int Do_UnCommit(void)
 {
     char *CurrentBranchName;
@@ -1294,3 +1940,78 @@ int Do_UnCommit(void)
     }
     return RetValue;
 }
+
+//int Do_ListAliases(void)
+//{
+//    struct Alias *a;
+//
+//    if(!g_AliasLoadedTried)
+//        LoadAliases();
+//
+//    for(a=g_AliasList;a!=NULL;a=a->Next)
+//        printf("%-20s %s\n",a->Name,a->Value);
+//}
+//
+//int Do_SetAlias(void)
+//{
+//    char buff[1000];
+//    int Bytes;
+//    int RetValue;
+//    struct Alias *a;
+//
+//    if(m_CmdsCount<5)
+//    {
+//        /* Ok, we are actually deleting this one */
+//        // Do_DeleteAlias
+//        return 0;
+//    }
+//
+//    RetValue=0;
+//    ctry(const char *)
+//    {
+//        if(m_CmdsCount<4)
+//            cthrow("Missing alias name");
+//
+//        if(!g_AliasLoadedTried)
+//            LoadAliases();
+//
+//        /* See if this alias already exists */
+//        for(a=g_AliasList;a!=NULL;a=a->Next)
+//            if(strcasecmp(a->Name,m_Cmds[3])==0)
+//                break;
+//        if(a==NULL)
+//        {
+//            /* Adding */
+//            a=malloc(sizeof(struct Alias));
+//            if(a==NULL)
+//                cthrow("Out of memory");
+//
+//            a->Name=malloc(strlen(m_Cmds[3])+1);
+//            if(a->Name==NULL)
+//                cthrow("Out of memory");
+//            strcpy(a->Name,m_Cmds[3]);
+//
+//            /* Link it in */
+//            a->Next=g_AliasList;
+//            g_AliasList=a;
+//        }
+//        else
+//        {
+//            /* Updating */
+//            free(a->Value);
+//        }
+//        a->Value=malloc(strlen(m_Cmds[4])+1);
+//        if(a->Value==NULL)
+//            cthrow("Out of memory");
+//        strcpy(a->Value,m_Cmds[4]);
+//        SaveAliases();
+//    }
+//    ccatch(const char *Msg)
+//    {
+//        fprintf(stderr,"%s\n",Msg);
+//        RetValue=1;
+//    }
+//
+//    return RetValue;
+//}
+
